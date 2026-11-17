@@ -2,7 +2,7 @@
 // Views, routing and event handling. Views return HTML strings; one delegated
 // click/input/change handler drives everything via data-action / data-bind.
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const UI = { route: '', editing: null, picker: null, askResolve: null };
@@ -794,6 +794,8 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
   }).catch(() => {});
+  // Only reload when an update replaces an existing worker, not on the very first install.
+  const hadController = !!navigator.serviceWorker.controller;
   let reloading = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloading) { reloading = true; location.reload(); } });
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloading) { reloading = true; location.reload(); } });
 }
