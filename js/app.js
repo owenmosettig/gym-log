@@ -2,7 +2,7 @@
 // Views, routing and event handling. Views return HTML strings; one delegated
 // click/input/change handler drives everything via data-action / data-bind.
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const UI = { route: '', editing: null, picker: null, askResolve: null };
@@ -767,11 +767,7 @@ document.addEventListener('click', async e => {
     case 'theme': DATA.settings.theme = d.v; saveData(); applyTheme(); render(); break;
     case 'export': exportData(); break;
     case 'import': $('#import-file').click(); break;
-    case 'update': {
-      const w = window.__waitingSW;
-      if (w) w.postMessage('skipWaiting'); else location.reload();
-      break;
-    }
+    case 'update': applyUpdate(); break;
   }
 });
 
@@ -857,6 +853,26 @@ window.addEventListener('hashchange', render);
 render();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
+// ---------- updates ----------
+// Tapping "Update available" must always end in a reload, even if iOS drops an event along the way.
+let reloading = false, updateRequested = false;
+const reloadOnce = () => { if (!reloading) { reloading = true; location.reload(); } };
+function applyUpdate() {
+  const btn = $('#update');
+  btn.textContent = 'Updating…';
+  btn.disabled = true;
+  updateRequested = true;
+  if (!('serviceWorker' in navigator)) return reloadOnce();
+  navigator.serviceWorker.getRegistration().then(reg => {
+    // Ask the registration fresh: the worker remembered when the pill appeared may be stale.
+    const w = (reg && reg.waiting) || window.__waitingSW;
+    if (!w || w.state === 'redundant' || w.state === 'activated') return reloadOnce();
+    w.addEventListener('statechange', () => { if (w.state === 'activated') reloadOnce(); });
+    w.postMessage('skipWaiting');
+    setTimeout(reloadOnce, 2500); // fallback if no event arrives
+  }).catch(reloadOnce);
+}
+
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').then(reg => {
     const notify = w => { window.__waitingSW = w; $('#update').hidden = false; };
@@ -867,8 +883,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
   }).catch(() => {});
-  // Only reload when an update replaces an existing worker, not on the very first install.
+  // Only reload when an update replaces an existing worker (or the user tapped Update), not on the very first install.
   const hadController = !!navigator.serviceWorker.controller;
-  let reloading = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloading) { reloading = true; location.reload(); } });
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController || updateRequested) reloadOnce(); });
 }

@@ -1,6 +1,6 @@
 // Service worker: keeps a copy of the app on the device so it works offline.
 // When you change any file, bump VERSION (and APP_VERSION in js/app.js) so phones pick up the update.
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 const CACHE = 'gymlog-' + VERSION;
 const FILES = [
   './',
@@ -28,7 +28,8 @@ self.addEventListener('activate', e => {
   );
 });
 
-self.addEventListener('message', e => { if (e.data === 'skipWaiting') self.skipWaiting(); });
+// waitUntil keeps the worker alive until skipWaiting finishes (iOS can otherwise suspend it first).
+self.addEventListener('message', e => { if (e.data === 'skipWaiting') e.waitUntil(self.skipWaiting()); });
 
 // Cache first; page navigations fall back to the cached app shell.
 self.addEventListener('fetch', e => {
