@@ -1,6 +1,6 @@
 // Service worker: keeps a copy of the app on the device so it works offline.
 // When you change any file, bump VERSION (and APP_VERSION in js/app.js) so phones pick up the update.
-const VERSION = '1.1.1';
+const VERSION = '1.2.0';
 const CACHE = 'gymlog-' + VERSION;
 const FILES = [
   './',
@@ -16,8 +16,16 @@ const FILES = [
   'icons/favicon-32.png'
 ];
 
+// A new version takes over as soon as its files are cached, without waiting for a tap on
+// "Update available". Older pages (≤1.1.1) reload themselves when that happens; newer ones
+// show "Update ready" and a tap simply reloads. Saved data is in localStorage, not this cache,
+// so a takeover never touches it.
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))));
+  e.waitUntil(
+    caches.open(CACHE)
+      .then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' }))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', e => {

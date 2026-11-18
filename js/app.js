@@ -2,7 +2,7 @@
 // Views, routing and event handling. Views return HTML strings; one delegated
 // click/input/change handler drives everything via data-action / data-bind.
 
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.2.0';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const UI = { route: '', editing: null, picker: null, askResolve: null };
@@ -59,11 +59,38 @@ function getSets(scope, exId) {
 const persist = scope => { if (scope === 'active') saveData(); };
 
 // ---------- Home ----------
+function greeting() {
+  const h = new Date().getHours();
+  const part = h >= 5 && h < 12 ? 'morning' : h >= 12 && h < 18 ? 'afternoon' : 'evening';
+  const name = (DATA.settings.name || '').trim();
+  return `Good ${part}${name ? ', ' + name : ''}`;
+}
+function weekCard(wp) {
+  if (!wp.rows.length) {
+    return `<div class="card week"><div class="eyebrow">This week</div>
+      <p class="muted small">No weekly targets yet. Add workouts to your split, or set targets in Settings.</p></div>`;
+  }
+  return `<div class="card week${wp.complete ? ' complete' : ''}">
+    <div class="target-top"><div class="eyebrow">This week</div>${wp.complete ? '<span class="tstat beat">✓ Week complete</span>' : ''}</div>
+    ${wp.rows.map(r => {
+      const n = Math.max(r.target, r.done);
+      return `<div class="wk-row">
+        <span class="wk-name">${esc(r.day.name)}</span>
+        <span class="dots" role="img" aria-label="${r.done} of ${r.target} done">${Array.from({ length: n }, (_, i) => `<span class="dot${i < r.done ? ' on' : ''}"></span>`).join('')}</span>
+        <span class="wk-count${r.target && r.done >= r.target ? ' hit' : ''}">${r.done}/${r.target}</span>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+const exPreview = day => day.exerciseIds.length
+  ? `<ol class="preview">${day.exerciseIds.map(id => `<li>${esc(DATA.exercises[id]?.name)}</li>`).join('')}</ol>`
+  : '<p class="muted">No exercises yet — add them once you start, or in Settings.</p>';
+
 function viewHome() {
-  const wd = new Date().getDay();
-  const day = getDay(DATA.schedule[wd]);
-  let h = header({ title: 'Today', sub: esc(fmtDate(todayStr(), true)) }) + '<div class="pad">';
   const a = DATA.active;
+  const wp = weekProgress();
+  const next = a ? null : suggestDay(wp);
+  let h = header({ title: greeting(), sub: esc(fmtDate(todayStr(), true)) }) + '<div class="pad">';
   if (a) {
     const done = a.order.filter(id => a.entries[id]?.done).length;
     h += `<div class="card active-card">
@@ -74,22 +101,18 @@ function viewHome() {
       <button class="btn primary block big" data-action="nav" data-to="/session">Resume session</button>
     </div>`;
   }
-  if (day) {
-    h += `<div class="card">
-      <div class="eyebrow">${WD_LONG[wd]}</div>
-      <div class="big">${esc(day.name)}</div>
-      ${day.exerciseIds.length
-        ? `<ol class="preview">${day.exerciseIds.map(id => `<li>${esc(DATA.exercises[id]?.name)}</li>`).join('')}</ol>`
-        : '<p class="muted">No exercises yet — add them once you start, or in Settings.</p>'}
-      ${a ? '' : `<button class="btn primary block big" data-action="start" data-day="${day.id}">Start ${esc(day.name)}</button>`}
+  h += weekCard(wp);
+  if (next) {
+    h += `<div class="card next">
+      <div class="eyebrow accent">${wp.complete ? 'Bonus session' : 'Up next'}</div>
+      <div class="big">${esc(next.name)}</div>
+      ${exPreview(next)}
+      <button class="btn primary block big" data-action="start" data-day="${next.id}">Start workout</button>
     </div>`;
-  } else {
-    h += `<div class="card"><div class="eyebrow">${WD_LONG[wd]}</div><div class="big">Rest day</div>
-      <p class="muted">Recover well. Training anyway? Pick a workout below.</p></div>`;
   }
-  const others = DATA.days.filter(d => d !== day);
+  const others = DATA.days.filter(d => d !== next);
   if (others.length) {
-    h += `<h2 class="section">${day ? 'Do a different workout' : 'Start a workout'}</h2><div class="list">
+    h += `<h2 class="section">${next ? 'Or pick a different workout' : 'Start a workout'}</h2><div class="list">
       ${others.map(d => `<button class="row" data-action="start" data-day="${d.id}">
         <div class="row-main"><div class="row-title">${esc(d.name)}</div><div class="row-sub">${d.exerciseIds.length} exercise${d.exerciseIds.length === 1 ? '' : 's'}</div></div>${chev}</button>`).join('')}
     </div>`;
@@ -419,12 +442,26 @@ function drawChart(exId) {
 const WEEK = [1, 2, 3, 4, 5, 6, 0];
 function viewSettings() {
   let h = header({ title: 'Settings' }) + '<div class="pad">';
+  h += `<h2 class="section">Profile</h2><div class="list">
+    <label class="row field-row"><span class="row-title">Your name</span>
+      <input class="input name-in" value="${esc(DATA.settings.name)}" data-bind="name" placeholder="Name" maxlength="40" autocomplete="off" autocapitalize="words" enterkeyhint="done" aria-label="Your name"></label></div>`;
   h += '<h2 class="section">Weekly split</h2><div class="list">' + WEEK.map(wd => `
     <label class="row field-row"><span class="row-title">${WD_LONG[wd]}</span>
       <select class="select" data-bind="sched" data-wd="${wd}">
         <option value="">Rest</option>
         ${DATA.days.map(d => `<option value="${d.id}"${DATA.schedule[wd] === d.id ? ' selected' : ''}>${esc(d.name)}</option>`).join('')}
       </select></label>`).join('') + '</div>';
+  h += '<h2 class="section">Weekly targets</h2><div class="list">' + DATA.days.map(d => {
+    const t = dayTarget(d), split = splitCount(d.id);
+    return `<div class="row field-row">
+      <div class="row-main"><div class="row-title">${esc(d.name)}</div>
+        <div class="row-sub">${d.target == null ? 'From your split' : `Custom · split has ${split}`}</div></div>
+      <div class="stepper">
+        <button class="step" data-action="target-step" data-day="${d.id}" data-delta="-1" ${t <= 0 ? 'disabled' : ''} aria-label="Fewer ${esc(d.name)} sessions">−</button>
+        <span class="stepper-v">${t}×</span>
+        <button class="step" data-action="target-step" data-day="${d.id}" data-delta="1" ${t >= 14 ? 'disabled' : ''} aria-label="More ${esc(d.name)} sessions">+</button>
+      </div></div>`;
+  }).join('') + '</div><p class="muted small">Sessions per week, Monday to Sunday. Shown on the Today screen.</p>';
   h += '<h2 class="section">Workout days</h2><div class="list">' + DATA.days.map(d => `
     <button class="row" data-action="nav" data-to="/settings/day/${d.id}">
       <div class="row-main"><div class="row-title">${esc(d.name)}</div><div class="row-sub">${d.exerciseIds.length ? esc(d.exerciseIds.map(id => DATA.exercises[id]?.name).join(', ')) : 'No exercises'}</div></div>${chev}</button>`).join('') +
@@ -764,6 +801,14 @@ document.addEventListener('click', async e => {
       render();
       break;
     }
+    case 'target-step': {
+      const day = getDay(d.day);
+      const n = Math.min(14, Math.max(0, dayTarget(day) + +d.delta));
+      day.target = n === splitCount(day.id) ? null : n; // back in line with the split → follow it again
+      saveData();
+      render();
+      break;
+    }
     case 'theme': DATA.settings.theme = d.v; saveData(); applyTheme(); render(); break;
     case 'export': exportData(); break;
     case 'import': $('#import-file').click(); break;
@@ -800,7 +845,8 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   const el = e.target, d = el.dataset;
   switch (d.bind) {
-    case 'sched': DATA.schedule[d.wd] = el.value || null; saveData(); break;
+    case 'sched': DATA.schedule[d.wd] = el.value || null; saveData(); render(); break;
+    case 'name': DATA.settings.name = el.value.trim().slice(0, 40); el.value = DATA.settings.name; saveData(); break;
     case 'ex-name': {
       const v = el.value.trim();
       if (v) DATA.exercises[d.ex].name = v; else el.value = DATA.exercises[d.ex].name;
@@ -883,7 +929,14 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
   }).catch(() => {});
-  // Only reload when an update replaces an existing worker (or the user tapped Update), not on the very first install.
+  // A new version took over (it activates itself once downloaded). Ignore the very first install;
+  // otherwise offer a refresh rather than reloading under the user's thumb mid-set.
   const hadController = !!navigator.serviceWorker.controller;
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController || updateRequested) reloadOnce(); });
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (updateRequested) return reloadOnce();
+    if (!hadController) return;
+    const pill = $('#update');
+    pill.textContent = 'Update ready — tap to refresh';
+    pill.hidden = false;
+  });
 }

@@ -3,7 +3,12 @@
 // Exercises are referenced by id everywhere, so renaming one keeps its history.
 
 const STORE_KEY = 'gymlog-data-v1';
-const SCHEMA = 1;
+// Schema history (the localStorage key stays 'gymlog-data-v1' so nothing moves):
+//  1: original.
+//  2: settings.name (greeting) and days[].target (weekly sessions; null = follow the split).
+//     Both are additive with defaults, so v1 data loads unchanged.
+const SCHEMA = 2;
+const DEFAULT_NAME = 'Owen';
 const DEFAULT_MIN = 5;
 const DEFAULT_MAX = 8;
 
@@ -21,7 +26,7 @@ function seedData() {
     schedule: { 0: null, 1: 'd_upper', 2: 'd_lower', 3: null, 4: 'd_upper', 5: 'd_lower', 6: null },
     sessions: [],
     active: null,
-    settings: { theme: 'system', lastExport: null }
+    settings: { theme: 'system', lastExport: null, name: DEFAULT_NAME }
   };
 }
 
@@ -41,6 +46,7 @@ function normalizeData(d) {
     out.days = d.days.filter(x => x && x.id).map(x => ({
       id: String(x.id),
       name: String(x.name || 'Workout'),
+      target: Number.isInteger(x.target) && x.target >= 0 ? Math.min(x.target, 14) : null,
       exerciseIds: (x.exerciseIds || []).filter(id => out.exercises[id])
     }));
   }
@@ -69,6 +75,8 @@ function normalizeData(d) {
     }
   }
   if (d.settings) Object.assign(out.settings, d.settings);
+  if (typeof out.settings.name !== 'string') out.settings.name = DEFAULT_NAME;
+  out.settings.name = out.settings.name.slice(0, 40);
   return out;
 }
 
@@ -79,6 +87,11 @@ function loadData() {
     DATA = raw ? normalizeData(JSON.parse(raw)) : seedData();
   } catch (e) {
     console.error(e);
+    // Never let a failed load silently overwrite real data: keep an untouched copy under its own key.
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (raw) localStorage.setItem(STORE_KEY + '-unreadable-' + Date.now(), raw);
+    } catch (e2) { console.error(e2); }
     DATA = seedData();
   }
 }
@@ -184,6 +197,44 @@ function createExercise(name) {
   return ex;
 }
 const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+
+// ---------- weekly targets (week runs Monday–Sunday, local time) ----------
+function weekBounds(d = new Date()) {
+  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  return [dateStr(start), dateStr(end)];
+}
+const splitCount = dayId => Object.values(DATA.schedule).filter(v => v === dayId).length;
+const dayTarget = day => (day.target ?? splitCount(day.id));
+// Finished sessions this week per workout day, whatever weekday they were done on.
+function weekProgress() {
+  const [from, to] = weekBounds();
+  const done = {};
+  for (const s of DATA.sessions) if (s.dayId && s.date >= from && s.date <= to) done[s.dayId] = (done[s.dayId] || 0) + 1;
+  const rows = DATA.days.map(day => ({ day, target: dayTarget(day), done: done[day.id] || 0 })).filter(r => r.target > 0 || r.done > 0);
+  const targeted = rows.filter(r => r.target > 0);
+  return { rows, complete: targeted.length > 0 && targeted.every(r => r.done >= r.target) };
+}
+function lastDoneDate(dayId) {
+  let last = '';
+  for (const s of DATA.sessions) if (s.dayId === dayId && s.date > last) last = s.date;
+  return last;
+}
+// Next workout: most sessions still left this week; ties go to today's split day, then the least recently done.
+// Once the week is complete, suggest the least recently done workout.
+function suggestDay(wp) {
+  const left = wp.rows.filter(r => r.done < r.target);
+  const pool = left.length ? left : DATA.days.map(day => ({ day, target: 0, done: 0 }));
+  if (!pool.length) return null;
+  const todayId = DATA.schedule[new Date().getDay()];
+  const order = DATA.days.map(d => d.id);
+  pool.sort((a, b) =>
+    (b.target - b.done) - (a.target - a.done) ||
+    (b.day.id === todayId) - (a.day.id === todayId) ||
+    lastDoneDate(a.day.id).localeCompare(lastDoneDate(b.day.id)) ||
+    order.indexOf(a.day.id) - order.indexOf(b.day.id));
+  return pool[0].day;
+}
 
 // ---------- active session ----------
 function startSession(dayId) {
