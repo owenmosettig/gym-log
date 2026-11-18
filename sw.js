@@ -1,6 +1,6 @@
 // Service worker: keeps a copy of the app on the device so it works offline.
 // When you change any file, bump VERSION (and APP_VERSION in js/app.js) so phones pick up the update.
-const VERSION = '1.0.1';
+const VERSION = '1.1.0';
 const CACHE = 'gymlog-' + VERSION;
 const FILES = [
   './',

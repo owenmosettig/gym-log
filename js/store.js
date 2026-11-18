@@ -126,6 +126,25 @@ function bestSet(sets) {
 }
 const hitTop = (ex, sets) => !!ex && sets.some(s => int(s.r, 0) > ex.repMax);
 
+// ---------- target to beat ----------
+// 1 = beaten (heavier weight, or same weight and more reps), 0 = matched, -1 = below.
+function cmpSet(a, b) {
+  if (a.w !== b.w) return a.w > b.w ? 1 : -1;
+  return a.r === b.r ? 0 : a.r > b.r ? 1 : -1;
+}
+// Live comparison of in-progress sets (strings while typing) against last time's saved sets.
+// perSet: set i vs last time's set i (null if no reps yet or no matching set).
+// overall: best set vs last best set; if those tie, beaten when some set improved and none dropped.
+function targetStatus(lastSets, curSets) {
+  const cur = curSets.map(s => ({ w: parseWeight(s.w), r: int(s.r, 0) }));
+  const perSet = cur.map((s, i) => (s.r > 0 && lastSets[i] ? cmpSet(s, lastSets[i]) : null));
+  const valid = cur.filter(s => s.r > 0);
+  if (!valid.length || !lastSets.length) return { overall: null, perSet };
+  let overall = cmpSet(bestSet(valid), bestSet(lastSets));
+  if (overall === 0 && perSet.includes(1) && !perSet.includes(-1)) overall = 1;
+  return { overall, perSet };
+}
+
 // ---------- queries ----------
 const sessionOrder = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (a.startedAt || 0) - (b.startedAt || 0));
 const sortedSessions = () => DATA.sessions.slice().sort(sessionOrder);

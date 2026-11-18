@@ -2,7 +2,7 @@
 // Views, routing and event handling. Views return HTML strings; one delegated
 // click/input/change handler drives everything via data-action / data-bind.
 
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.1.0';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const UI = { route: '', editing: null, picker: null, askResolve: null };
@@ -21,14 +21,21 @@ function header({ title, sub, back, backLabel, right }) {
   </header>`;
 }
 const chev = '<span class="chev" aria-hidden="true">›</span>';
+const progressBar = (done, total) =>
+  `<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${done}"><span style="width:${total ? Math.round((done / total) * 100) : 0}%"></span></div>`;
 const UP = '<svg class="up-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-function setRow(scope, exId, i, s, ex) {
+const ST_CLS = { '1': ' st-beat', '0': ' st-match', '-1': ' st-below' };
+const ST_TITLE = { '1': 'Beat last time', '0': 'Matched last time', '-1': 'Below last time' };
+function setN(i, st) {
+  return `<div class="set-n${ST_CLS[st] || ''}"${ST_TITLE[st] ? ` title="${ST_TITLE[st]}"` : ''}>${st === 1 ? '✓' : i + 1}</div>`;
+}
+function setRow(scope, exId, i, s, ex, st) {
   const d = `data-scope="${scope}" data-ex="${exId}" data-i="${i}"`;
   const over = parseInt(s.r, 10) > ex.repMax;
   return `<div class="set-row">
-    <div class="set-n">${i + 1}</div>
-    <label class="w-field"><input class="w-in" type="text" inputmode="decimal" enterkeyhint="done" autocomplete="off" placeholder="0" value="${esc(s.w)}" data-bind="set-w" ${d} aria-label="Set ${i + 1} weight"><span>kg</span></label>
+    ${setN(i, st)}
+    <label class="w-field"><input class="w-in" type="text" inputmode="decimal" enterkeyhint="done" autocomplete="off" placeholder="0" value="${esc(s.w)}" data-bind="set-w" ${d} aria-label="Set ${i + 1} weight in kg"></label>
     <div class="reps${over ? ' over' : ''}">
       <button class="step" data-action="rep-step" data-delta="-1" ${d} aria-label="Fewer reps">−</button>
       <input class="r-in" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" value="${esc(s.r)}" data-bind="set-r" ${d} aria-label="Set ${i + 1} reps">
@@ -37,10 +44,10 @@ function setRow(scope, exId, i, s, ex) {
     <button class="icon-btn" data-action="set-del" ${d} aria-label="Remove set">✕</button>
   </div>`;
 }
-function setsBlock(scope, exId, sets, ex) {
+function setsBlock(scope, exId, sets, ex, perSet) {
   return `<div class="sets">
-    <div class="sets-head"><span>Set</span><span>Weight</span><span>Reps</span><span></span></div>
-    ${sets.map((s, i) => setRow(scope, exId, i, s, ex)).join('')}
+    <div class="sets-head"><span>Set</span><span>Weight · kg</span><span>Reps</span><span></span></div>
+    ${sets.map((s, i) => setRow(scope, exId, i, s, ex, perSet ? perSet[i] : null)).join('')}
     ${sets.length ? '' : '<p class="muted small center">No sets — this exercise won’t be logged.</p>'}
     <button class="btn block add-set" data-action="set-add" data-scope="${scope}" data-ex="${exId}">+ Add set</button>
   </div>`;
@@ -63,6 +70,7 @@ function viewHome() {
       <div class="eyebrow accent">In progress</div>
       <div class="big">${esc(a.dayName)}</div>
       <div class="muted">${a.date === todayStr() ? 'Today' : 'Started ' + esc(fmtDate(a.date))} · ${done}/${a.order.length} done</div>
+      ${progressBar(done, a.order.length)}
       <button class="btn primary block big" data-action="nav" data-to="/session">Resume session</button>
     </div>`;
   }
@@ -108,9 +116,9 @@ function viewSession() {
   const a = DATA.active;
   const done = a.order.filter(id => a.entries[id]?.done).length;
   let h = header({ title: a.dayName, sub: `${esc(fmtDate(a.date))} · ${done}/${a.order.length} done`, back: '/', backLabel: 'Today' });
-  h += '<div class="pad">';
+  h += '<div class="pad">' + progressBar(done, a.order.length);
   if (a.order.length) {
-    h += '<div class="list">' + a.order.map(id => {
+    h += '<div class="ex-list">' + a.order.map(id => {
       const ex = DATA.exercises[id];
       if (!ex) return '';
       const en = a.entries[id];
@@ -119,12 +127,13 @@ function viewSession() {
       if (en?.done) {
         const c = cleanSets(en.sets);
         sub = c.length ? esc(setsSummary(c)) : 'No sets logged';
+        if (beatLastTime(id)) flag = '<span class="badge win">✓ Beat last time</span>';
       } else {
         sub = last ? 'Last: ' + esc(setsSummary(last.entry.sets)) : 'No history yet';
         if (en) sub = '<span class="accent">Started</span> · ' + sub;
         if (last && hitTop(ex, last.entry.sets)) flag = `<span class="badge">${UP} Increase weight</span>`;
       }
-      return `<button class="row ex-row${en?.done ? ' done' : ''}" data-action="nav" data-to="/session/${id}">
+      return `<button class="row ex-row${en?.done ? ' done' : en ? ' started' : ''}" data-action="nav" data-to="/session/${id}">
         <span class="check" aria-label="${en?.done ? 'Done' : 'Not done'}">${en?.done ? '✓' : ''}</span>
         <div class="row-main"><div class="row-title">${esc(ex.name)}</div><div class="row-sub">${sub}</div>${flag}</div>${chev}</button>`;
     }).join('') + '</div>';
@@ -138,21 +147,62 @@ function viewSession() {
   return h;
 }
 
+// ---------- Target to beat ----------
+const PILL = { '1': ['beat', '✓ Beaten'], '0': ['match', '= Matched'], '-1': ['below', '↓ Below'] };
+function statusPill(overall) {
+  const [cls, label] = PILL[overall] || ['none', 'Not logged'];
+  return `<span id="t-status" class="tstat ${cls}" role="status">${label}</span>`;
+}
+const tset = s => `<span class="tset">${s.w > 0 ? `<b>${fmtW(s.w)}</b><small>kg</small>` : '<b>BW</b>'}<i>×</i><b>${s.r}</b></span>`;
+function targetCard(ex, last, st) {
+  if (!last) {
+    return `<div class="card target first">
+      <div class="eyebrow">Target to beat</div>
+      <div class="target-title">First time — set your baseline</div>
+      <div class="muted small">What you log today becomes next time’s target.</div>
+    </div>`;
+  }
+  const sets = last.entry.sets;
+  const when = `Last time · ${esc(fmtDate(last.session.date))}`;
+  if (hitTop(ex, sets)) {
+    return `<div class="card target inc" data-st="${st.overall}">
+      <div class="target-top"><div class="eyebrow accent">${UP} Increase weight</div>${statusPill(st.overall)}</div>
+      <div class="target-title">New target: beat your reps at a heavier weight</div>
+      <div class="muted small">${when}: ${esc(setsSummary(sets))}</div>
+    </div>`;
+  }
+  return `<div class="card target" data-st="${st.overall}">
+    <div class="target-top"><div class="eyebrow">Target to beat</div>${statusPill(st.overall)}</div>
+    <div class="target-sets${sets.length > 1 ? ' many' : ''}">${sets.map(tset).join('')}</div>
+    <div class="muted small">${when}</div>
+  </div>`;
+}
+// Update the status pill and per-set markers while typing, without re-rendering (keeps the keyboard up).
+function updateTarget(exId) {
+  const card = $('.target');
+  const last = lastPerf(exId);
+  if (!card || !last) return;
+  const st = targetStatus(last.entry.sets, DATA.active.entries[exId].sets);
+  card.dataset.st = st.overall;
+  $('#t-status').outerHTML = statusPill(st.overall);
+  document.querySelectorAll('.sets .set-row').forEach((row, i) => { row.querySelector('.set-n').outerHTML = setN(i, st.perSet[i]); });
+}
+function beatLastTime(exId) {
+  const last = lastPerf(exId);
+  const en = DATA.active.entries[exId];
+  return !!(last && en && targetStatus(last.entry.sets, en.sets).overall === 1);
+}
+
 function viewExercise(exId) {
   const a = DATA.active;
   const ex = DATA.exercises[exId];
   if (!ex || !a.order.includes(exId)) { go('/session'); return ''; }
   const en = ensureEntry(exId);
   const last = lastPerf(exId);
+  const st = last ? targetStatus(last.entry.sets, en.sets) : null;
   let h = header({ title: ex.name, sub: `Rep range ${ex.repMin}–${ex.repMax}`, back: '/session', backLabel: a.dayName });
-  h += '<div class="pad">';
-  if (last && hitTop(ex, last.entry.sets)) {
-    h += `<div class="flag">${UP}<div>Hit the top of your range last time — increase weight.</div></div>`;
-  }
-  h += `<div class="card last">${last
-    ? `<div class="eyebrow">Last time · ${esc(fmtDate(last.session.date))}</div><div class="last-sets">${esc(setsSummary(last.entry.sets))}</div>`
-    : '<div class="eyebrow">Last time</div><div class="muted">First time logging this exercise.</div>'}</div>`;
-  h += setsBlock('active', exId, en.sets, ex);
+  h += '<div class="pad">' + targetCard(ex, last, st);
+  h += setsBlock('active', exId, en.sets, ex, st && st.perSet);
   const over = hitTop(ex, en.sets);
   h += `<p class="hint" id="over-hint"${over ? '' : ' hidden'}>Above ${ex.repMax} reps — you’ll get an “increase weight” note next time.</p>`;
   h += en.done
@@ -293,7 +343,11 @@ function viewProgressDetail(exId) {
   const diff = Math.round((last.best.w - first.best.w) * 100) / 100;
   const cls = diff > 0 ? 'pos' : diff < 0 ? 'neg' : '';
   h += `<div class="card">
-    <div class="summary">${fmtW(first.best.w)}kg → ${fmtW(last.best.w)}kg, <span class="${cls}">${diff > 0 ? '+' : diff < 0 ? '−' : '±'}${fmtW(Math.abs(diff))}kg</span> since ${esc(fmtMonth(first.session.date))}</div>
+    <div class="stats">
+      <div class="stat"><div class="stat-l">${esc(fmtMonth(first.session.date))}</div><div class="stat-v">${fmtW(first.best.w)}<small>kg</small></div></div>
+      <div class="stat"><div class="stat-l">Now</div><div class="stat-v">${fmtW(last.best.w)}<small>kg</small></div></div>
+      <div class="stat"><div class="stat-l">Change</div><div class="stat-v ${cls}">${diff > 0 ? '+' : diff < 0 ? '−' : '±'}${fmtW(Math.abs(diff))}<small>kg</small></div></div>
+    </div>
     <div class="muted small">Best set per session · labels show reps</div>
     <div class="chart" id="chart"></div>
   </div>`;
@@ -343,11 +397,18 @@ function drawChart(exId) {
       svg += `<text class="ax" x="${(x(i) + dx).toFixed(1)}" y="${H - 8}" text-anchor="${anchor}">${fmtShort(p.date)}</text>`;
     }
   });
-  if (n > 1) svg += `<polyline class="ln" points="${pts.map((p, i) => `${x(i).toFixed(1)},${y(p.w).toFixed(1)}`).join(' ')}"/>`;
+  if (n > 1) {
+    const line = pts.map((p, i) => `${x(i).toFixed(1)},${y(p.w).toFixed(1)}`).join(' ');
+    const base = (padT + plotH).toFixed(1);
+    svg += `<defs><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="fill-top"/><stop offset="1" class="fill-bot"/></linearGradient></defs>`;
+    svg += `<polygon class="area" points="${x(0).toFixed(1)},${base} ${line} ${x(n - 1).toFixed(1)},${base}"/>`;
+    svg += `<polyline class="ln" points="${line}"/>`;
+  }
   pts.forEach((p, i) => {
     const cx = x(i).toFixed(1), cy = y(p.w).toFixed(1);
-    svg += `<circle class="pt" cx="${cx}" cy="${cy}" r="5"><title>${fmtShort(p.date)}: ${fmtW(p.w)}kg × ${p.r}</title></circle>`;
-    svg += `<text class="lbl" x="${cx}" y="${(+cy - 11).toFixed(1)}" text-anchor="middle">${p.r}</text>`;
+    if (i === n - 1) svg += `<circle class="pt-halo" cx="${cx}" cy="${cy}" r="11"/>`;
+    svg += `<circle class="pt${i === n - 1 ? ' last' : ''}" cx="${cx}" cy="${cy}" r="${i === n - 1 ? 6 : 4.5}"><title>${fmtShort(p.date)}: ${fmtW(p.w)}kg × ${p.r}</title></circle>`;
+    svg += `<text class="lbl${i === n - 1 ? ' last' : ''}" x="${cx}" y="${(+cy - (i === n - 1 ? 17 : 11)).toFixed(1)}" text-anchor="middle">${p.r}</text>`;
   });
   el.innerHTML = axis + '<div class="plot">' + svg + '</svg></div>';
   const plot = el.querySelector('.plot');
@@ -507,9 +568,10 @@ function answer(i) {
 }
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, cls) {
   const t = $('#toast');
   t.textContent = msg;
+  t.className = 'toast' + (cls ? ' ' + cls : '');
   t.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.hidden = true; }, 2200);
@@ -609,7 +671,15 @@ document.addEventListener('click', async e => {
       break;
     }
     case 'finish': finishSession(); break;
-    case 'ex-done': DATA.active.entries[d.ex].done = true; saveData(); go('/session'); break;
+    case 'ex-done': {
+      const en = DATA.active.entries[d.ex];
+      const wasDone = en.done;
+      en.done = true;
+      saveData();
+      go('/session');
+      if (!wasDone && beatLastTime(d.ex)) toast('✓ Beat last time', 'win');
+      break;
+    }
     case 'ex-undone': DATA.active.entries[d.ex].done = false; saveData(); render(); break;
     case 'rep-step': {
       const sets = getSets(d.scope, d.ex);
@@ -706,8 +776,10 @@ document.addEventListener('click', async e => {
 });
 
 function updateOverHint(scope, exId) {
+  if (scope !== 'active') return;
   const h = $('#over-hint');
-  if (h && scope === 'active') h.hidden = !hitTop(DATA.exercises[exId], getSets(scope, exId));
+  if (h) h.hidden = !hitTop(DATA.exercises[exId], getSets(scope, exId));
+  updateTarget(exId);
 }
 
 document.addEventListener('input', e => {
@@ -715,6 +787,7 @@ document.addEventListener('input', e => {
   if (d.bind === 'set-w') {
     getSets(d.scope, d.ex)[+d.i].w = el.value.replace(',', '.').replace(/[^0-9.]/g, '');
     persist(d.scope);
+    updateOverHint(d.scope, d.ex);
   } else if (d.bind === 'set-r') {
     const v = el.value.replace(/\D/g, '').slice(0, 3);
     if (v !== el.value) el.value = v;
